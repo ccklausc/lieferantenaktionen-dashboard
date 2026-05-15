@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>Lieferantenaktionen – Live-Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://alcdn.msauth.net/browser/3.10.0/js/msal-browser.min.js"></script>
+<style>
+  :root{
+    --bg:#f3f5f9; --card:#fff; --ink:#1c2433; --mute:#5c6577; --line:#e3e7ee;
+    --brand:#2f6df6; --brand-2:#1f4e78; --ok:#16a34a; --warn:#f59e0b; --bad:#dc2626;
+    --planned:#6366f1; --active:#16a34a; --endingsoon:#f59e0b; --ended:#64748b; --archived:#94a3b8;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Segoe UI, Arial, sans-serif;background:var(--bg);color:var(--ink);}
+  header{background:var(--brand-2);color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
+  header h1{margin:0;font-size:18px;font-weight:600}
+  header .meta{font-size:12px;opacity:.85}
+  header button{background:rgba(255,255,255,.18);border:0;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer}
+  header button:hover{background:rgba(255,255,255,.3)}
+  main{padding:20px 24px;max-width:1400px;margin:0 auto}
+  .loading{padding:60px;text-align:center;color:var(--mute)}
+  .error{background:#fef2f2;color:var(--bad);padding:14px;border-radius:10px;margin-bottom:20px;border:1px solid #fecaca}
+  .login{padding:60px;text-align:center}
+  .login button{background:var(--brand);color:#fff;border:0;padding:12px 28px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;position:relative;overflow:hidden}
+  .kpi .lbl{font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.4px}
+  .kpi .val{font-size:30px;font-weight:700;margin-top:4px;line-height:1}
+  .kpi .sub{font-size:12px;color:var(--mute);margin-top:4px}
+  .kpi.warn .val{color:var(--warn)} .kpi.bad .val{color:var(--bad)} .kpi.ok .val{color:var(--ok)}
+  .grid2{display:grid;grid-template-columns:1.2fr 1fr;gap:16px;margin-bottom:20px}
+  @media (max-width:900px){.grid2{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card h3{margin:0 0 12px;font-size:14px;color:var(--mute);text-transform:uppercase;letter-spacing:.4px}
+  canvas{max-height:240px}
+  table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;border:1px solid var(--line);font-size:13px;margin-top:8px}
+  th{background:#f6f8fb;text-align:left;padding:10px;font-weight:600;font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.3px;border-bottom:1px solid var(--line)}
+  td{padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  tr:hover td{background:#fafbfd}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+  .s-Geplant{background:#eef2ff;color:var(--planned)}
+  .s-Aktiv{background:#dcfce7;color:var(--active)}
+  .s-Endet-bald{background:#fef3c7;color:#92400e}
+  .s-Beendet{background:#e2e8f0;color:var(--ended)}
+  .s-Archiviert{background:#f1f5f9;color:var(--archived)}
+  .flag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;background:#fee2e2;color:var(--bad);margin-right:4px;margin-bottom:2px}
+  .empty{padding:24px;text-align:center;color:var(--mute);font-size:13px}
+  a.list-link{color:var(--brand);font-size:13px;text-decoration:none;margin-left:6px}
+  a.list-link:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Lieferantenaktionen – Live-Dashboard</h1>
+  <div>
+    <span class="meta" id="lastUpdate"></span>
+    <button id="reloadBtn" style="margin-left:14px;display:none">Aktualisieren</button>
+  </div>
+</header>
+
+<main>
+  <div id="content"><div class="loading">Initialisiere Anmeldung…</div></div>
+</main>
+
+<script>
+const CLIENT_ID = 'e718f651-68ff-43b0-b924-b1cbd2f39eb6';
+const TENANT_ID = 'f14cacf9-5c9e-4a49-898f-ddd1714e972c';
+const SITE_HOST = 'ccsgmbhcokg.sharepoint.com';
+const SITE_PATH = '/sites/CCWien-CCATLieferantenaktionen';
+const LIST_NAME = 'Lieferantenaktionen';
+const SITE_FULL = `https://${SITE_HOST}${SITE_PATH}`;
+
+const msalConfig = {
+  auth: {
+    clientId: CLIENT_ID,
+    authority: `https://login.microsoftonline.com/${TENANT_ID}`,
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: 'sessionStorage' }
+};
+const SCOPES = ['Sites.Read.All', 'User.Read'];
+const msalInstance = new msal.PublicClientApplication(msalConfig);
+
+const status = r => {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const start = r.fields.Aktionsstart ? new Date(r.fields.Aktionsstart) : null;
+  const ende = r.fields.Aktionsende ? new Date(r.fields.Aktionsende) : null;
+  if (r.fields.CVerrechnung && ende && (today - ende) > 30*86400000) return 'Archiviert';
+  if (ende && ende < today) return 'Beendet';
+  if (start && start > today) return 'Geplant';
+  if (ende && (ende - today) <= 7*86400000) return 'Endet bald';
+  return 'Aktiv';
+};
+const fmt = d => d ? new Date(d).toLocaleDateString('de-AT') : '–';
+const flags = r => {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const f = [];
+  if (!r.fields.CBestaet) f.push('Bestätigung offen');
+  if (!r.fields.CKalender) f.push('Kalender fehlt');
+  const us = r.fields.UmsatzSoll ? new Date(r.fields.UmsatzSoll) : null;
+  const ui = r.fields.UmsatzIst ? new Date(r.fields.UmsatzIst) : null;
+  if (us && us<today && !ui && r.fields.UmsatzNeu) f.push('Umsatzmeldung überfällig');
+  const ende = r.fields.Aktionsende ? new Date(r.fields.Aktionsende) : null;
+  if (ende && ende<today && !r.fields.CVerrechnung) f.push('Bonus offen');
+  return f;
+};
+
+async function init() {
+  await msalInstance.initialize();
+  const accounts = msalInstance.getAllAccounts();
+  if (accounts.length === 0) {
+    showLogin();
+  } else {
+    msalInstance.setActiveAccount(accounts[0]);
+    loadData();
+  }
+}
+
+function showLogin() {
+  document.getElementById('content').innerHTML = `
+    <div class="login">
+      <p>Bitte einmal mit deinem CC-Wien-Konto anmelden.</p>
+      <button onclick="doLogin()">Mit Microsoft anmelden</button>
+    </div>`;
+}
+
+async function doLogin() {
+  try {
+    const result = await msalInstance.loginPopup({ scopes: SCOPES });
+    msalInstance.setActiveAccount(result.account);
+    loadData();
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="error">Login fehlgeschlagen: ${e.message}</div>`;
+  }
+}
+
+async function getToken() {
+  try {
+    const r = await msalInstance.acquireTokenSilent({ scopes: SCOPES });
+    return r.accessToken;
+  } catch (e) {
+    const r = await msalInstance.acquireTokenPopup({ scopes: SCOPES });
+    return r.accessToken;
+  }
+}
+
+async function loadData() {
+  try {
+    document.getElementById('content').innerHTML = '<div class="loading">Lade Daten via Microsoft Graph…</div>';
+    document.getElementById('reloadBtn').style.display = 'inline-block';
+    document.getElementById('reloadBtn').onclick = loadData;
+    const token = await getToken();
+    // Resolve site
+    const siteR = await fetch(`https://graph.microsoft.com/v1.0/sites/${SITE_HOST}:${SITE_PATH}`, {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!siteR.ok) throw new Error('Site: ' + siteR.status);
+    const site = await siteR.json();
+    // Get list items with fields
+    const itemsR = await fetch(`https://graph.microsoft.com/v1.0/sites/${site.id}/lists/${LIST_NAME}/items?expand=fields&$top=500`, {
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (!itemsR.ok) throw new Error('Items: ' + itemsR.status);
+    const items = (await itemsR.json()).value;
+    renderAll(items);
+    document.getElementById('lastUpdate').textContent = 'Stand: ' + new Date().toLocaleTimeString('de-AT');
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="error"><strong>Fehler:</strong> ${e.message}</div>`;
+  }
+}
+
+function renderAll(items) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const counts = {
+    active: items.filter(r => ['Aktiv','Endet bald'].includes(status(r))).length,
+    endingSoon: items.filter(r => { const e=r.fields.Aktionsende?new Date(r.fields.Aktionsende):null; return e&&e>=today&&(e-today)<=14*86400000; }).length,
+    endingMonth: items.filter(r => { const e=r.fields.Aktionsende?new Date(r.fields.Aktionsende):null; return e&&e.getMonth()===today.getMonth()&&e.getFullYear()===today.getFullYear(); }).length,
+    planned: items.filter(r => status(r)==='Geplant').length,
+    archive: items.filter(r => status(r)==='Beendet'&&r.fields.CVerrechnung).length,
+    noBest: items.filter(r => !r.fields.CBestaet).length,
+    noCal: items.filter(r => !r.fields.CKalender).length,
+    overdueUms: items.filter(r => { const us=r.fields.UmsatzSoll?new Date(r.fields.UmsatzSoll):null; const ui=r.fields.UmsatzIst?new Date(r.fields.UmsatzIst):null; return us&&us<today&&!ui&&r.fields.UmsatzNeu; }).length,
+    openBonus: items.filter(r => { const e=r.fields.Aktionsende?new Date(r.fields.Aktionsende):null; return e&&e<today&&!r.fields.CVerrechnung; }).length,
+  };
+  const avgDur = items.length ? Math.round(items.reduce((a,r)=>{const s=r.fields.Aktionsstart?new Date(r.fields.Aktionsstart):null; const e=r.fields.Aktionsende?new Date(r.fields.Aktionsende):null; return a+(s&&e?(e-s)/86400000:0);},0)/items.length) : 0;
+
+  const kpis = [
+    {l:'Aktive Aktionen', v:counts.active, s:'laufen aktuell', c:'ok'},
+    {l:'Endet in 14 Tagen', v:counts.endingSoon, s:'Reminder & Endabrechnung', c:'warn'},
+    {l:'Endet diesen Monat', v:counts.endingMonth, s:'Monatsabschluss'},
+    {l:'In Vorbereitung', v:counts.planned, s:'Start in der Zukunft'},
+    {l:'Archiv-Kandidaten', v:counts.archive, s:'beendet & verrechnet'},
+    {l:'Ohne Bestätigung', v:counts.noBest, s:'Compliance', c:counts.noBest?'bad':'ok'},
+    {l:'Nicht im Kalender', v:counts.noCal, s:'Compliance', c:counts.noCal?'bad':'ok'},
+    {l:'Umsatzmeldung überfällig', v:counts.overdueUms, s:'Lieferant erinnern', c:counts.overdueUms?'bad':'ok'},
+    {l:'Bonus offen', v:counts.openBonus, s:'Endabrechnung CC', c:counts.openBonus?'warn':'ok'},
+    {l:'Ø Aktionsdauer', v:avgDur+' T', s:'Mittelwert'},
+  ];
+  const kpisHTML = `<div class="kpi-grid">${kpis.map(k=>`<div class="kpi ${k.c||''}"><div class="lbl">${k.l}</div><div class="val">${k.v}</div><div class="sub">${k.s}</div></div>`).join('')}</div>`;
+  const chartsHTML = `<div class="grid2"><div class="card"><h3>Status-Pipeline</h3><canvas id="chartStatus"></canvas></div><div class="card"><h3>Abrechnungsart</h3><canvas id="chartBilling"></canvas></div></div><div class="grid2"><div class="card"><h3>Aktionen pro Monat (Aktionsstart)</h3><canvas id="chartMonths"></canvas></div><div class="card"><h3>Top Lieferanten</h3><canvas id="chartSuppliers"></canvas></div></div>`;
+  const issues = [];
+  items.forEach(r => flags(r).forEach(f => issues.push({r,f})));
+  const complianceHTML = `<div class="card"><h3>Compliance-Check (offene Punkte)</h3>${issues.length ? issues.map(i=>`<div style="padding:8px 0;border-bottom:1px solid var(--line);font-size:13px"><strong>${esc(i.r.fields.Title)}</strong> · ${esc(i.r.fields.Lieferant||'')} <span class="flag">${i.f}</span><a class="list-link" href="${SITE_FULL}/Lists/Lieferantenaktionen/DispForm.aspx?ID=${i.r.id}" target="_blank">öffnen ›</a></div>`).join('') : '<div class="empty">Keine offenen Punkte.</div>'}</div>`;
+  const sortedRows = items.slice().sort((a,b)=>{const ea=a.fields.Aktionsende?new Date(a.fields.Aktionsende).getTime():9e15; const eb=b.fields.Aktionsende?new Date(b.fields.Aktionsende).getTime():9e15; return ea-eb;});
+  const tableHTML = `<div class="card" style="margin-top:20px"><h3>Alle Aktionen</h3>${sortedRows.length ? `<table><thead><tr><th>Status</th><th>Lieferant</th><th>Aktion</th><th>Zeitraum</th><th>Abrechnung</th><th>Flags</th><th></th></tr></thead><tbody>${sortedRows.map(r=>{const s=status(r);const fl=flags(r);return `<tr><td><span class="pill s-${s.replace(' ','-')}">${s}</span></td><td><strong>${esc(r.fields.Lieferant||'')}</strong><br><span style="color:var(--mute);font-size:11px">Nr. ${esc(r.fields.Lieferantennummer||'')}</span></td><td><strong>${esc(r.fields.Title||'')}</strong><br><span style="color:var(--mute);font-size:12px">${esc((r.fields.Aktionsbeschreibung||'').slice(0,80))}${(r.fields.Aktionsbeschreibung||'').length>80?'…':''}</span></td><td>${fmt(r.fields.Aktionsstart)}<br>bis ${fmt(r.fields.Aktionsende)}</td><td>${esc(r.fields.Abrechnungsart||'')}</td><td>${fl.map(f=>`<span class="flag">${f}</span>`).join('')}</td><td><a class="list-link" href="${SITE_FULL}/Lists/Lieferantenaktionen/DispForm.aspx?ID=${r.id}" target="_blank">öffnen</a></td></tr>`;}).join('')}</tbody></table>` : '<div class="empty">Keine Aktionen in der Liste.</div>'}</div>`;
+  document.getElementById('content').innerHTML = kpisHTML + chartsHTML + complianceHTML + tableHTML;
+  renderCharts(items);
+}
+
+function renderCharts(items){
+  const sc = {'Geplant':0,'Aktiv':0,'Endet bald':0,'Beendet':0,'Archiviert':0};
+  items.forEach(r => sc[status(r)]++);
+  new Chart(document.getElementById('chartStatus'), { type:'bar', data:{labels:Object.keys(sc), datasets:[{data:Object.values(sc), backgroundColor:['#6366f1','#16a34a','#f59e0b','#64748b','#94a3b8']}]}, options:{plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{stepSize:1}}}}});
+  const bill = {};
+  items.forEach(r => bill[r.fields.Abrechnungsart||'(leer)'] = (bill[r.fields.Abrechnungsart||'(leer)']||0)+1);
+  new Chart(document.getElementById('chartBilling'), { type:'doughnut', data:{labels:Object.keys(bill), datasets:[{data:Object.values(bill), backgroundColor:['#2f6df6','#16a34a','#f59e0b','#94a3b8']}]}, options:{plugins:{legend:{position:'bottom'}}}});
+  const months = ['Jan','Feb','Mär','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Dez'];
+  const mc = Array(12).fill(0);
+  items.forEach(r => { if(r.fields.Aktionsstart) mc[new Date(r.fields.Aktionsstart).getMonth()]++; });
+  new Chart(document.getElementById('chartMonths'), { type:'line', data:{labels:months, datasets:[{data:mc, borderColor:'#2f6df6', backgroundColor:'rgba(47,109,246,.15)', fill:true, tension:.3}]}, options:{plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{stepSize:1}}}}});
+  const sup = {};
+  items.forEach(r => { if(r.fields.Lieferant) sup[r.fields.Lieferant] = (sup[r.fields.Lieferant]||0)+1; });
+  const supE = Object.entries(sup).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  new Chart(document.getElementById('chartSuppliers'), { type:'bar', data:{labels:supE.map(e=>e[0]), datasets:[{data:supE.map(e=>e[1]), backgroundColor:'#1f4e78'}]}, options:{indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true,ticks:{stepSize:1}}}}});
+}
+
+function esc(s){return String(s||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+
+init();
+</script>
+</body>
+</html>
